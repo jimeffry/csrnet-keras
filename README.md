@@ -1,4 +1,6 @@
-# CSRNet-Keras
+# csrnet-keras
+> The original author's code is [here](https://github.com/ZhengPeng7/CSRNet-Keras)
+>
 > An unofficial implementation of CSRNet for crowd counting in Keras-Tensorflow.
 
 ---
