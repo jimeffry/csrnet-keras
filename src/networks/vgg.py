@@ -59,11 +59,7 @@ def CSRNet(input_shape=(3,None,None),d_format='channels_first'):
     
     seg_map = Conv2D(4, (3, 3), strides=(1, 1), padding='same',data_format=d_format, activation='relu',kernel_initializer=dilated_conv_kernel_initializer)(x)
     feature_map = Conv2D(1, (3, 3), strides=(1, 1), padding='same', data_format=d_format,activation='relu',kernel_initializer=dilated_conv_kernel_initializer)(x)
-    
-    seg_map = Softmax(axis=1)(seg_map)
-    seg_map = MaxLayer()(seg_map)
-    outx = Multiply()([feature_map,seg_map])
-    outx = Conv2D(1, 1, strides=(1, 1), activation='relu',data_format=d_format, kernel_initializer=dilated_conv_kernel_initializer)(outx)
+    outx = Conv2D(1, 1, strides=(1, 1), activation='relu',data_format=d_format, kernel_initializer=dilated_conv_kernel_initializer)(feature_map)
     output_flow = UpSampling2D(size=(8, 8), data_format=d_format, interpolation='nearest')(outx)
     # output_flow = Conv2D(1,(3,3), strides=(1, 1),padding='same', data_format=d_format,activation='relu',kernel_initializer=dilated_conv_kernel_initializer)(output_flow)
     output_flow = Squeeze()(output_flow)

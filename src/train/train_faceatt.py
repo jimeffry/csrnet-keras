@@ -14,13 +14,13 @@ from keras.optimizers import SGD, Adam
 from keras.utils import multi_gpu_model
 import numpy as np
 sys.path.append(os.path.join(os.path.dirname(__file__),'../networks'))
-from vgg import CSRNet
+from resnet import get_model,ResNet50_Model
 sys.path.append(os.path.join(os.path.dirname(__file__),'../configs'))
 from config import cfg
 sys.path.append(os.path.join(os.path.dirname(__file__),'../losses'))
-from utils_loss import multiloss,MSE_BCE
+from utils_loss import Sigmoidloss,BCEloss
 sys.path.append(os.path.join(os.path.dirname(__file__),'../preparedata'))
-from utils_dataloader import DataLoader
+from load_imgs import DataLoader
 
 
 def get_args():
@@ -36,7 +36,7 @@ def get_args():
                         help='the net training learningrate')
     parser.add_argument("--gpus", type=int, default=1,
                         help='how many gpus for trainning')
-    parser.add_argument("--db_name",type=str,default="ShangHai",\
+    parser.add_argument("--db_name",type=str,default="celeba",\
                         help="training on which dataset")
     parser.add_argument("--log_dir",type=str,default="../logs",\
                         help="training on which dataset")
@@ -79,15 +79,14 @@ def main():
     lr = args.lr
     logger = createlogger(args.log_dir)
     logger.debug("Loading data...")
-    train_dataset = DataLoader(cfg.img_dir,batch_size,image_sets=[('part_C_final', 'train_data')])
-    val_dataseta = DataLoader(cfg.img_dir,1,image_sets=[('part_C_final', 'test_data')],mode='test')
-    # val_datasetb = DataLoader(cfg.shanghai_dir,2,image_sets=[('part_B_final', 'test_data')])
-    # val_datasetc = DataLoader(cfg.shanghai_dir,2,image_sets=[('part_C_final', 'test_data')])
+    train_dataset = DataLoader(cfg.img_dir,batch_size,cfg.train_file)
+    val_dataset = DataLoader(cfg.img_dir,1,cfg.test_file,mode='test')
     #build model
-    model = CSRNet()
+    # model = get_model(cfg.ClsNum)
+    model = ResNet50_Model(classes=cfg.ClsNum,input_shape=(112,112,3))
     if not os.path.exists(cfg.model_dir):
         os.makedirs(cfg.model_dir)
-    with open(os.path.join(cfg.model_dir, "csr_{}.json".format(train_db)), "w") as f:
+    with open(os.path.join(cfg.model_dir, "faceattr_{}.json".format(train_db)), "w") as f:
         f.write(model.to_json())
     if pretrained_file :
         model.load_weights(pretrained_file)
@@ -98,7 +97,7 @@ def main():
     #              metrics=['accuracy'])
     if gpu_num >1:
         model = multi_gpu_model(model,gpu_num)
-    model.compile(optimizer=opt, loss=multiloss)
+    model.compile(optimizer=opt, loss=Sigmoidloss)
     logger.debug("Model summary...")
     #model.count_params()
     # model.summary()
@@ -116,21 +115,18 @@ def main():
         hist = model.fit_generator(data_geneter(train_dataset), steps_per_epoch=train_dataset.batch_num,
                               epochs=nb_epochs, verbose=1,
                               callbacks=callbacks,
-                              validation_data=data_geneter(val_dataseta),
-                              nb_val_samples=val_dataseta.batch_num,
+                              validation_data=data_geneter(val_dataset),
+                              nb_val_samples=val_dataset.batch_num,
                               nb_worker=1)
         logger.debug("Saving weights...")
-        model.save_weights(os.path.join(cfg.model_dir, "csr_{}_best.h5".format(train_db)),overwrite=True)
+        model.save_weights(os.path.join(cfg.model_dir, "faceattr_{}_best.h5".format(train_db)),overwrite=True)
     else:
         epoch_step = 0
         loss_hist = collections.deque(maxlen=200)
         total_id = 0
-        tmp_diffa = 10000
-        tmp_diffb = 10000
-        mean_diff = 10000
-        tmp_diffc = 10000
-        rgb_mean = np.array([0.5, 0.5, 0.5])[np.newaxis, np.newaxis,:].astype('float32')
-        rgb_std = np.array([0.225, 0.225, 0.225])[np.newaxis, np.newaxis,:].astype('float32')
+        acc_max = 0.0
+        rgb_mean = np.array([0.485, 0.456, 0.406])[np.newaxis, np.newaxis,:].astype('float32')
+        rgb_std = np.array([0.229, 0.224, 0.225])[np.newaxis, np.newaxis,:].astype('float32')
         while epoch_step < nb_epochs:
             step = 0
             while step < train_dataset.batch_num:
@@ -157,41 +153,35 @@ def main():
                 total_id +=1
                 cur_loss = float(loss.history['loss'][0])
                 loss_hist.append(cur_loss)
+                # K.set_learning_phase(1)
                 if total_id %100==0:
                     logger.info('epoch:{} || iter:{} || tloss:{:.6f},curloss:{:.6f} || lr:{:.6f}'.format(epoch_step,total_id,np.mean(loss_hist),cur_loss,lr))
-                if total_id % 500 ==0:
-                    tmp_vala = val(model,val_dataseta,logger,2)
-                    # tmp_valb = val(model,val_datasetb,logger,2)
-                    # tmp_valc = val(model,val_datasetc,logger,2)
-                    # tmp_mean = (tmp_vala+tmp_valb)/2.0
-                    if tmp_vala < tmp_diffa:
+                if total_id % 1000 ==0:
+                    tmp_val = val_face(model,val_dataset,logger,1)
+                    if tmp_val > acc_max:
                         save_fg = 1
-                        tmp_diffa = tmp_vala
-                    # if tmp_valb < tmp_diffb:
-                    #     save_fg = 1
-                    #     tmp_diffb = tmp_valb
-                    # if tmp_valc < tmp_diffc:
-                    #     save_fg = 1
-                    #     tmp_diffc = tmp_valc
+                        acc_max = tmp_val
+                    logger.info("the best acc is : %.4f" % acc_max)
                     if save_fg :
                         logger.info("Saving weights...{}".format(total_id))
-                        model.save_weights(os.path.join(cfg.model_dir, "csr_{}_best2.h5".format(train_db)))
-                        # mean_diff = tmp_mean
+                        model.save_weights(os.path.join(cfg.model_dir, "faceattr_{}_best.h5".format(train_db)))
             epoch_step +=1
 
-def val(net,val_loader,logger,batch_size):
+
+def val_face(net,val_loader,logger,batch_size):
+    acc = 0.0
     diff_sum = 0.0
     for batch_idx in range(int(val_loader.batch_num)):
         images ,targets = val_loader.next_batch()
         out = net.predict(images)
-        # diff = cal_diffnum(out,targets)
-        # outshape = K.shape(out)
-        # out = K.reshape(out,(outshape[0],outshape[2],outshape[3]))
-        diff = abs(np.sum(out)-np.sum(targets))
+        out = np.where(out>0.5,1,0)
+        diff = np.sum(abs(out-targets))
         diff_sum += diff
     total_num = batch_size *(batch_idx+1)
-    logger.info('test MAE:%.4f' % (diff_sum/total_num))
-    return diff_sum/total_num
+    acc = 1.0 - diff_sum/(total_num *21.0)
+    logger.info('test acc:%.4f' % acc)
+    return acc
+
 
 def set_keras_backend(backend):
     if K.backend() != backend:
